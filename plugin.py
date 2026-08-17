@@ -66,7 +66,7 @@ class BasePlugin:
             # import rpdb
             # rpdb.set_trace()
             DumpConfigToLog()
-        Domoticz.Heartbeat(30)   # ⬅️ Increased heartbeat to avoid timeout
+        Domoticz.Heartbeat(120)   # ⬅️ Increased heartbeat to avoid timeout
         testData = False
         if os.path.isfile(Parameters['HomeFolder'] + '/testdata.on'):
             testData = True
@@ -350,7 +350,7 @@ def onHandleThread(startup):
                         try:
                             tuyastatus = Tuyalist[0]['dps']
                         except:
-                            exit
+                            continue
                     else:
                         # ⬇️ WRAPPED in try/except to catch timeouts, connection errors, etc.
                         try:
