@@ -46,6 +46,7 @@ import json
 import ast
 import time
 import base64
+import traceback
 
 
 class BasePlugin:
@@ -229,9 +230,13 @@ def onHandleThread(startup):
                                 Domoticz.Log('Create device Light On/Off (Unknown Light Device)')
                                 Domoticz.Unit(Name=dev['name'] + ' (Unknown Light Device)', DeviceID=dev['id'], Unit=unit, Type=244, Subtype=73, Switchtype=0, Used=1).Create() #On/Off
                     # elif dev_type not in ('light', 'fanlight', 'pirlight'):
+                    Domoticz.Debug('DEBUG mapping = ' + str(mapping))
                     for item in mapping.values():
-                        # Domoticz.Debug(str(item['code']))
-                        unit = int(item['dp'])
+                        try:
+                            unit = int(item['dp'])
+                        except (ValueError, TypeError):
+                            Domoticz.Debug('Skipping non-numeric DP: ' + str(item['dp']) + ' (' + str(item.get('code', '')) + ')')
+                            continue
                         if  createDevice(dev['id'], unit):
 
                             # Create Switch
@@ -351,6 +356,9 @@ def onHandleThread(startup):
                         tuya.detect_available_dps()
                         tuya.detect_available_dps() # Two times for detection bulb devices
                         tuyastatus = tuya.status()
+                        if not isinstance(tuyastatus, dict):
+                            Domoticz.Error('Tuya status invalid for ' + str(dev['name']) + ' (' + str(dev['id']) + '): ' + str(tuyastatus))
+                            continue
                     if float(time.time()) > float(getConfigItem(dev['id'], 'last_update')) or testData == True:
                         # Domoticz.Debug('tuyastatus: ' + str(tuyastatus))
                         # Domoticz.Debug('dev: ' + str(dev))
@@ -384,7 +392,7 @@ def onHandleThread(startup):
                                         tuyastatus_value = tuyastatus_dps.get(str(unit), 'Key not found')
                                     # Domoticz.Debug('tuyastatus: ' + str(tuyastatus_value))
                                     if createDevice(dev['id'], unit) == False and unit is not None and tuyastatus_value != 'Key not found':
-                                        currentstatus = get_scale(tuyastatus_value, str(item))
+                                        currentstatus = get_scale(tuyastatus_value, item)
                                         Domoticz.Debug('Unit: ' + str(unit) + ' Currentstatus: ' + str(currentstatus))
                                         Domoticz.Debug('dtype: ' + str(dtype.Type) + ' ' + str(dtype.SubType) + ' ' + str(dtype.SwitchType) + ' ' + str(item['values']))
                                         # Domoticz.Debug('Item: ' + str(item['code']))
@@ -438,6 +446,7 @@ def onHandleThread(startup):
                                         battery_device(unit, item['code'], currentstatus)
                                 except Exception as err:
                                     Domoticz.Error('handleThread: ' + str(err)  + ' line ' + format(sys.exc_info()[-1].tb_lineno))
+                                    Domoticz.Error(traceback.format_exc())
                                 except:
                                     pass
                                     # Domoticz.Debug('No update mapping for ' + item['code'] + ' skipped')
@@ -445,7 +454,7 @@ def onHandleThread(startup):
 
     except Exception as err:
         Domoticz.Error('handleThread: ' + str(err)  + ' line ' + format(sys.exc_info()[-1].tb_lineno))
-
+        Domoticz.Error(traceback.format_exc())
 # Generic helper functions
 def DumpConfigToLog():
     for x in Parameters:
@@ -560,8 +569,10 @@ def UpdateDevice(ID, Unit, sValue, nValue, TimedOut, AlwaysUpdate = 0):
     if str(Devices[ID].Units[Unit].sValue) != str(sValue) or str(Devices[ID].Units[Unit].nValue) != str(nValue) or str(Devices[ID].TimedOut) != str(TimedOut) or AlwaysUpdate == 1:
         if sValue == None:
             sValue = Devices[ID].Units[Unit].sValue
-        if type(sValue) == int or type(sValue) == float:
+        if type(sValue) == int:
             Devices[ID].Units[Unit].LastLevel = sValue
+        elif type(sValue) == float:
+            Devices[ID].Units[Unit].LastLevel = int(sValue) 
         elif type(sValue) == dict:
             Devices[ID].Units[Unit].Color = json.dumps(sValue)
         Devices[ID].Units[Unit].sValue = str(sValue)
@@ -725,13 +736,12 @@ def set_scale(raw, item):
     scale = 0
     try:
         # Domoticz.Debug('Scale :' + str(item['values'].get('scale', 0 )))
-        if item['values'] in 'scale':
+        if 'scale' in item['values']:
             scale = item['values'].get('scale')
-        # step = the_values.get('step', 0)
-        if item['values'] in 'unit':
+        if 'unit' in item['values']:
             unit = item['values'].get('unit')
-        if item['values'] in 'max':
-            max = item['values'].get('max')
+        if 'max' in item['values']:
+            max_value = item['values'].get('max')
 
         if scale == 1:
             result = int(raw * 10)
@@ -762,11 +772,11 @@ def get_scale(raw, item):
         try:
             # Domoticz.Debug('Raw Value: ' + str(raw) + '  Type: ' + str(type(raw)))
             # Domoticz.Debug('Item Values: ' + str(item['values']))
-            if item['values'] in 'scale':
+            if 'scale' in item['values']:
                 scale = item['values'].get('scale')
-            if item['values'] in 'unit':
+            if 'unit' in item['values']:
                 unit = item['values'].get('unit')
-            if item['values'] in 'max':
+            if 'max' in item['values']:
                 max_value = item['values'].get('max')
 
             if scale == 0:
@@ -790,7 +800,9 @@ def get_scale(raw, item):
         # If raw is not numeric, return it unmodified
         result = raw
         Domoticz.Debug('Non-numeric input, returning raw value: ' + str(result))
-
+    Domoticz.Debug(f"get_scale: code={item.get('code')}, raw={raw}, scale={scale}, result={result}")
+    # Also log the full values dict if needed:
+    Domoticz.Debug(f"get_scale: values dict = {item.get('values')}")
     return result
 
     # Configuration Helpers
