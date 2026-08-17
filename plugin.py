@@ -66,7 +66,7 @@ class BasePlugin:
             # import rpdb
             # rpdb.set_trace()
             DumpConfigToLog()
-        # Domoticz.Heartbeat(10)
+        Domoticz.Heartbeat(30)   # ⬅️ Increased heartbeat to avoid timeout
         testData = False
         if os.path.isfile(Parameters['HomeFolder'] + '/testdata.on'):
             testData = True
@@ -352,11 +352,18 @@ def onHandleThread(startup):
                         except:
                             exit
                     else:
-                        tuya = tinytuya.Device(dev_id=str(dev['id']), address=str(dev['ip']), local_key=str(dev['key']), version=str(dev['version']), connection_timeout=5, connection_retry_limit=1)
-                        tuya.detect_available_dps()
-                        tuya.detect_available_dps() # Two times for detection bulb devices
-                        tuyastatus = tuya.status()
-                        if not isinstance(tuyastatus, dict):
+                        # ⬇️ WRAPPED in try/except to catch timeouts, connection errors, etc.
+                        try:
+                            tuya = tinytuya.Device(dev_id=str(dev['id']), address=str(dev['ip']), local_key=str(dev['key']), version=str(dev['version']), connection_timeout=3, connection_retry_limit=1)
+                            tuya.detect_available_dps()
+                            tuya.detect_available_dps() # Two times for detection bulb devices
+                            tuyastatus = tuya.status()
+                        except Exception as e:
+                            Domoticz.Error(f"Error polling device {dev['name']} ({dev['id']}): {e}")
+                            traceback.print_exc()
+                            continue   # skip this device and move on
+
+                        if tuyastatus is None or not isinstance(tuyastatus, dict):
                             Domoticz.Error('Tuya status invalid for ' + str(dev['name']) + ' (' + str(dev['id']) + '): ' + str(tuyastatus))
                             continue
                     if float(time.time()) > float(getConfigItem(dev['id'], 'last_update')) or testData == True:
@@ -447,14 +454,17 @@ def onHandleThread(startup):
                                 except Exception as err:
                                     Domoticz.Error('handleThread: ' + str(err)  + ' line ' + format(sys.exc_info()[-1].tb_lineno))
                                     Domoticz.Error(traceback.format_exc())
-                                except:
-                                    pass
-                                    # Domoticz.Debug('No update mapping for ' + item['code'] + ' skipped')
+                                    continue   # skip this DP and continue with next
+                                # except:
+                                #     pass
+                                #     # Domoticz.Debug('No update mapping for ' + item['code'] + ' skipped')
 
 
     except Exception as err:
         Domoticz.Error('handleThread: ' + str(err)  + ' line ' + format(sys.exc_info()[-1].tb_lineno))
         Domoticz.Error(traceback.format_exc())
+    # ⬇️ Added completion debug
+    Domoticz.Debug("onHandleThread completed successfully")
 # Generic helper functions
 def DumpConfigToLog():
     for x in Parameters:
