@@ -55,25 +55,33 @@ class BasePlugin:
         return
 
     def onStart(self):
-        Domoticz.Log('TinyTUYA ' + Parameters['Version'] + ' plugin started')
-        Domoticz.Log('TinyTuya Version:' + tinytuya.version )
+        Domoticz.Heartbeat(30)
+        Domoticz.Log("Heartbeat set to 30 second")
+        try:
+            Domoticz.Log('TinyTUYA ' + Parameters['Version'] + ' plugin started')
+            Domoticz.Log('TinyTuya Version:' + tinytuya.version )
 
-        global testData
+            global testData
 
-        if Parameters['Mode6'] != '0':
-            Domoticz.Debugging(int(Parameters['Mode6']))
-            # Domoticz.Log('Debugger started, use 'telnet 0.0.0.0 4444' to connect')
-            # import rpdb
-            # rpdb.set_trace()
-            DumpConfigToLog()
-        Domoticz.Heartbeat(120)   # ⬅️ Increased heartbeat to avoid timeout
-        testData = False
-        if os.path.isfile(Parameters['HomeFolder'] + '/testdata.on'):
-            testData = True
-            Domoticz.Error('!!! Warning Plugin overruled by local json file !!!')
-
-        onHandleThread(True)
-
+            if Parameters['Mode6'] != '0':
+                Domoticz.Debugging(int(Parameters['Mode6']))
+               # Domoticz.Log("Debugger started, use 'telnet 0.0.0.0 4444' to connect")
+               # import rpdb
+               # rpdb.set_trace()
+                DumpConfigToLog()
+            
+            testData = False
+            if os.path.isfile(Parameters['HomeFolder'] + '/testdata.on'):
+                testData = True
+                Domoticz.Error('!!! Warning Plugin overruled by local json file !!!')       
+            onHandleThread(True)
+            Domoticz.Log("onStart complete, thread should stay alive")
+        except Exception as e:
+            Domoticz.Error(f"FATAL in onStart: {e}")
+            traceback.print_exc()
+        finally:
+            Domoticz.Log("onStart: exiting")
+        
     def onStop(self):
         Domoticz.Log('onStop called')
 
@@ -126,13 +134,17 @@ class BasePlugin:
         Domoticz.Log('onDisconnect called')
 
     def onHeartbeat(self):
-        Domoticz.Debug('onHeartbeat called')
+        Domoticz.Log("onHeartbeat: called")
         # if time.time() - getConfigItem(DeviceID, 'last_update') < 10:
         #     Domoticz.Debug("onHeartbeat called skipped")
         #     return
         # Domoticz.Debug("onHeartbeat called last run: " + str(time.time() - last_update))
-        onHandleThread(False)
-
+        try:
+            onHandleThread(False)
+        except Exception as e:
+            Domoticz.Error(f"onHeartbeat exception: {e}")
+            traceback.print_exc()
+        Domoticz.Log("onHeartbeat: finished")
 global _plugin
 _plugin = BasePlugin()
 
@@ -170,6 +182,9 @@ def onHeartbeat():
 
 def onHandleThread(startup):
     # Run for every device on startup and heartbeat
+    start_time = time.time()
+    Domoticz.Debug(f"onHandleThread: entered, startup={startup}")
+    global testData 
     try:
         if startup == True:
             global tuya, devs, last_update, result
@@ -186,15 +201,25 @@ def onHandleThread(startup):
                 result = json.load(rFile)
         if devs is None:
             Domoticz.Error('devices.json is missing in the plugin folder!')
-            exit
+            return   
         # Create devices
         for dev in devs:
+            Domoticz.Debug(f"Polling device {dev['name']} ({dev['id']})...")
             # Domoticz.Debug( 'Device name=' + str(dev['name']) + ' id=' + str(dev['id']) + ' ip=' + str(dev['ip']) + ' version=' + str(dev['version'])) # ' key=' + str(dev['key']) +
             mapping = dev['mapping']
             dev_type = DeviceType(dev['category'])
+            #Skip non‑pollable devices (IR, gateways) to save time
+            if dev['category'] in ('infrared', 'infrared_ac', 'wg2'):
+                Domoticz.Debug(f"Skipping {dev['name']} (non‑pollable)")
+                continue
             for key, value in mapping.items():
                 value['dp'] = key
             code_list = [value['code'] for key, value in mapping.items()]
+            
+            # Skip IR devices (they cannot be polled)
+            if 'ir_send' in code_list or 'ir_study_code' in code_list:
+                Domoticz.Debug(f"Skipping {dev['name']} (IR device)")
+                continue
             # Domoticz.Debug(str(code_list))
             if str(dev['ip']) != '' or startup == True:
                 # tuya = tinytuya.Device(ev_id=str(dev['id']), address=str(dev['ip']), local_key=str(dev['key']), version=float(dev['version']))
@@ -350,18 +375,20 @@ def onHandleThread(startup):
                         try:
                             tuyastatus = Tuyalist[0]['dps']
                         except:
-                            continue
+                            return
                     else:
-                        # ⬇️ WRAPPED in try/except to catch timeouts, connection errors, etc.
+                        Domoticz.Debug(f"Polling device {dev['name']} ({dev['id']}) at {dev['ip']}...")
                         try:
-                            tuya = tinytuya.Device(dev_id=str(dev['id']), address=str(dev['ip']), local_key=str(dev['key']), version=str(dev['version']), connection_timeout=3, connection_retry_limit=1)
+                            tuya = tinytuya.Device(dev_id=str(dev['id']), address=str(dev['ip']), local_key=str(dev['key']), version=str(dev['version']), connection_timeout=2, connection_retry_limit=1)
                             tuya.detect_available_dps()
-                            tuya.detect_available_dps() # Two times for detection bulb devices
+                            tuya.detect_available_dps()
+                            Domoticz.Debug("Calling tuya.status()...")
                             tuyastatus = tuya.status()
+                            Domoticz.Debug('tuyastatus: ' + str(tuyastatus))
                         except Exception as e:
                             Domoticz.Error(f"Error polling device {dev['name']} ({dev['id']}): {e}")
                             traceback.print_exc()
-                            continue   # skip this device and move on
+                            continue
 
                         if tuyastatus is None or not isinstance(tuyastatus, dict):
                             Domoticz.Error('Tuya status invalid for ' + str(dev['name']) + ' (' + str(dev['id']) + '): ' + str(tuyastatus))
@@ -372,8 +399,13 @@ def onHandleThread(startup):
                         unit = 1
                         if 'Device Unreachable' in str(tuyastatus):
                             Domoticz.Error('Device :' + dev['id'] + ' is Offline!')
-                            # setConfigItem(dev['id'], {'last_update': time.time() + 300})
-                            UpdateDevice(dev['id'], unit, 'Off', 0, 1)
+                            # Find first available unit for this device
+                            if dev['id'] in Devices and Devices[dev['id']].Units:
+                                first_unit = next(iter(Devices[dev['id']].Units))
+                                UpdateDevice(dev['id'], first_unit, 'Off', 0, 1)
+                            else:
+                                Domoticz.Debug(f"No units found for device {dev['id']}, skipping offline update")
+                            continue   # skip further processing for this device
                         else:
                             # Domoticz.Debug('Type: ' + str(dev_type))
                             if dev_type in ('light', 'fanlight', 'pirlight'):
@@ -384,6 +416,7 @@ def onHandleThread(startup):
                             # Domoticz.Debug(str(mapping.values()))
                             for item in mapping.values():
                                 # Domoticz.Debug('Item' + str(item))
+                                Domoticz.Debug(f"Processing DP {item.get('code')} (unit={unit})")
                                 try:
                                     unit = int(item['dp'])
                                     try:
@@ -454,17 +487,20 @@ def onHandleThread(startup):
                                 except Exception as err:
                                     Domoticz.Error('handleThread: ' + str(err)  + ' line ' + format(sys.exc_info()[-1].tb_lineno))
                                     Domoticz.Error(traceback.format_exc())
-                                    continue   # skip this DP and continue with next
-                                # except:
-                                #     pass
-                                #     # Domoticz.Debug('No update mapping for ' + item['code'] + ' skipped')
-
-
+                                except:
+                                    pass
+                                    # Domoticz.Debug('No update mapping for ' + item['code'] + ' skipped')
+                                Domoticz.Debug(f"Finished DP {item.get('code')}")
+                            # This line must have the SAME indentation as the 'for item' line above
+                            Domoticz.Debug(f"Finished device {dev['name']}")
     except Exception as err:
+        Domoticz.Error("exception in onhandle thread")
         Domoticz.Error('handleThread: ' + str(err)  + ' line ' + format(sys.exc_info()[-1].tb_lineno))
         Domoticz.Error(traceback.format_exc())
-    # ⬇️ Added completion debug
-    Domoticz.Debug("onHandleThread completed successfully")
+    finally:
+        Domoticz.Debug("=== onHandleThread EXITED (normal or error) ===")
+        elapsed = time.time() - start_time
+        Domoticz.Debug(f"=== onHandleThread EXITED (elapsed {elapsed:.2f}s) ===")
 # Generic helper functions
 def DumpConfigToLog():
     for x in Parameters:
@@ -576,6 +612,9 @@ def DeviceType(category):
 
 def UpdateDevice(ID, Unit, sValue, nValue, TimedOut, AlwaysUpdate = 0):
     # Make sure that the Domoticz device still exists (they can be deleted) before updating it
+    if ID not in Devices or Unit not in Devices[ID].Units:
+        Domoticz.Debug(f"UpdateDevice: Device {ID} Unit {Unit} not found, skipping")
+        return
     if str(Devices[ID].Units[Unit].sValue) != str(sValue) or str(Devices[ID].Units[Unit].nValue) != str(nValue) or str(Devices[ID].TimedOut) != str(TimedOut) or AlwaysUpdate == 1:
         if sValue == None:
             sValue = Devices[ID].Units[Unit].sValue
@@ -600,7 +639,7 @@ def SendCommand(ID, Unit, Status, Type = ''):
         item = selected_device['mapping'][str(Unit)]
         Status = get_scale(Status, item)
         # Domoticz.Debug('Status: ' + str(Status))
-        tuya = tinytuya.BulbDevice(dev_id=str(ID), address=str(getConfigItem(ID, 'ip')), local_key=str(getConfigItem(ID, 'key')), version=str(getConfigItem(ID, 'version')), connection_timeout=5, connection_retry_limit=1)
+        tuya = tinytuya.BulbDevice(dev_id=str(ID), address=str(getConfigItem(ID, 'ip')), local_key=str(getConfigItem(ID, 'key')), version=str(getConfigItem(ID, 'version')), connection_timeout=3, connection_retry_limit=1)
         tuya.detect_available_dps()
         # tuya = tinytuya.BulbDevice(str(ID), getConfigItem(ID, 'ip'), getConfigItem(ID, 'key'))
         # tuya.set_version(str(getConfigItem(ID, 'version')))
@@ -629,7 +668,7 @@ def SendCommand(ID, Unit, Status, Type = ''):
         selected_device = next((dev for dev in devs if dev['id'] == str(ID)), None)
         item = selected_device['mapping'][str(Unit)]
         Status = get_scale(Status, item)
-        tuya = tinytuya.Device(dev_id=str(ID), address=str(getConfigItem(ID, 'ip')), local_key=str(getConfigItem(ID, 'key')), version=str(getConfigItem(ID, 'version')), connection_timeout=5, connection_retry_limit=1)
+        tuya = tinytuya.Device(dev_id=str(ID), address=str(getConfigItem(ID, 'ip')), local_key=str(getConfigItem(ID, 'key')), version=str(getConfigItem(ID, 'version')), connection_timeout=3, connection_retry_limit=1)
         tuya.detect_available_dps()
         payload = tuya.generate_payload(tinytuya.CONTROL_NEW, {Unit: Status})
         tuya.send(payload)
