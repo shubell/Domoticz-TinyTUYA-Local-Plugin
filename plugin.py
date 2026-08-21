@@ -333,7 +333,6 @@ def refresh_device(dev, startup=False):
     dev_id = str(dev.get("id", ""))
     dev_category = DeviceType(dev.get("category", ""))
     mapping = dev.get("mapping", {})
-
     if testData:
         dps = get_snapshot_dps(dev_id)
         if dps is None:
@@ -385,7 +384,7 @@ def refresh_device(dev, startup=False):
             currentstatus = get_scale(raw_value, item)
             Domoticz.Debug("Scaled value: {}".format(currentstatus))
             dtype = Devices[dev_id].Units[unit]
-
+            Domoticz.Debug("Unit {} Type/SubType/SwitchType: {}/{}/{}".format(unit, dtype.Type, dtype.SubType, dtype.SwitchType))
             if str(item["code"]) in ("switch", "switch_1", "switch_2"):
                 Domoticz.Debug("Final value for {}: {}".format(item["code"], currentstatus))
                 UpdateDevice(dev_id, unit, currentstatus, 0 if currentstatus is False else 1, 0)
@@ -438,10 +437,8 @@ def refresh_device(dev, startup=False):
                 Domoticz.Debug("Final value for {}: {}".format(item["code"], currentstatus))
                 UpdateDevice(dev_id, unit, currenttext, 1, 0)
 
-            elif dtype.Type == 243 and dtype.SubType == 29:
-            # ... power handling ...
+            elif (dtype.Type == 243 and dtype.SubType == 29) or (dtype.Type == 248 and dtype.SubType == 1):
                 signe = ""
-                # Only power_a and power_b need the extra /10 and sign handling
                 if str(item["code"]) == "power_a":
                     signe_val = dps.get("102", "")
                     if signe_val == "FORWARD":
@@ -457,9 +454,18 @@ def refresh_device(dev, startup=False):
                         signe = " -"
                     power_value = float(currentstatus) / 10.0
                 else:
-                    # For add_ele, cur_power, etc. – use scaled value directly
                     power_value = float(currentstatus)
-                UpdateDevice(dev_id, unit, signe + str(power_value) + ";" + signe + str(power_value), 0, 0)
+
+                # Build sValue with correct second part
+                if dtype.Type == 248:
+                    # Usage Electric expects "Usage;Return" – set Return = 0
+                    svalue = signe + str(power_value) + ";0.0"
+                else:
+                    # General/kWh expects "Counter;Usage" – keep usage in both (KR behaviour)
+                    svalue = signe + str(power_value) + ";" + signe + str(power_value)
+
+                Domoticz.Debug("Final value for {}: {}".format(item["code"], power_value))
+                UpdateDevice(dev_id, unit, svalue, 0, 0)
 
             else:
                 Domoticz.Debug("Final value for {}: {}".format(item["code"], currentstatus))
@@ -816,7 +822,7 @@ def create_mapped_unit(dev, item, code_list):
             Domoticz.Unit(Name="{} (V)".format(name), DeviceID=dev_id, Unit=102 + unit, Type=243, Subtype=8, Used=1).Create()
             Domoticz.Unit(Name="{} (kWh)".format(name), DeviceID=dev_id, Unit=103 + unit, Type=243, Subtype=29, Used=1).Create()
         else:
-            # Create as Usage (Electric) sensor – same as add_ele
+            # Use Type=243, Subtype=29 (General/kWh) – same as original/KR
             Domoticz.Unit(Name="{} ({})".format(name, code), DeviceID=dev_id, Unit=unit, Type=243, Subtype=29, Used=1).Create()
 
     elif code in temperature_codes:
